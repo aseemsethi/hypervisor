@@ -24,17 +24,37 @@ ESP=00008000 EBP=BBBBBBBB ESI=CCCCCCCC EDI=DDDDDDDD SS=0000 ES=0000 GS=0000
         MSR0x48A=000000000000002C 
 
 
-CR0=0000000080050033  CR4=00000000000407F0  EFER=0000000000000D01  
+CR0=000000008005003B  CR4=00000000000407E0  EFER=0000000000000D01  
 
-                        vmxon_region=0000000077460000 
+                        vmxon_region=0000000077470000 
 
-guest_region=0000000077461000 
-pgdir_region=0000000077462000 
-pgtbl_region=0000000077463000 
-g_IDT_region=0000000077464000 
-g_GDT_region=0000000077464800 
-g_LDT_region=0000000077464A00 
-g_TSS_region=0000000077464C00 
-g_TOS_region=0000000077468000 
-h_MSR_region=0000000077468000 
-
+guest_region=0000000077471000 
+pgdir_region=0000000077472000 
+pgtbl_region=0000000077473000 
+g_IDT_region=0000000077474000 
+g_GDT_region=0000000077474800 
+g_LDT_region=0000000077474A00 
+g_TSS_region=0000000077474C00 
+g_TOS_region=0000000077478000 
+h_MSR_region=0000000077478000 
+-----------------------------------
+Feb 11 06:35:16 localhost kernel: Stepping 10
+Feb 11 06:35:16 localhost kernel: Model 7
+Feb 11 06:35:16 localhost kernel: Family 0
+Feb 11 06:35:16 localhost kernel: Processor Type 0
+Feb 11 06:35:16 localhost kernel: Extended Model 1
+Feb 11 06:35:16 localhost kernel: Extended Family 0
+Feb 11 06:35:16 localhost kernel: Serial Number 0x0000000000000000
+Feb 11 06:35:16 localhost kernel: x86_64 mode
+Feb 11 06:35:16 localhost kernel: cr0 = 0xffffffff8005003b
+Feb 11 06:35:16 localhost kernel: cr2 = 0xffffffffb8ad6048
+Feb 11 06:35:16 localhost kernel: cr3 = 0xffff8800000407e0
+Feb 11 06:35:16 localhost kernel: getMSR: msr=0x480, hi=5a0800 lo=d
+Feb 11 06:35:16 localhost kernel: vmcs_num_bytes = 0x800
+Feb 11 06:35:16 localhost kernel: <1>#012Installing 'wiser' module (major=88) 
+Feb 11 06:35:16 localhost kernel: processor is 'GenuineIntel' 
+Feb 11 06:35:16 localhost kernel: Virtualization Technology is supported 
+Feb 11 06:35:33 localhost kernel: #012 VM-instruction error: 00000000  Exit Reason: 00000000 
+Feb 11 06:35:33 localhost kernel: VMexit-interruption-information: 00000000 
+Feb 11 06:35:33 localhost kernel: VMexit-interruption-error-code:  00000000 
+---------------------

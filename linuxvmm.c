@@ -52,6 +52,12 @@
 #define __SELECTOR_VRAM	0x0014
 #define __SELECTOR_FLAT	0x001C
 
+#define IA32_VMX_BASIC 0x480
+#define IA32_VMX_PINBASED_CTLS 0x481
+#define IA32_VMX_PROCBASED_CTLS 0x482
+#define IA32_VMX_PROCBASED_CTLS2 0x48B
+
+
 char modname[] = "wiser";
 int my_major = 88;
 char cpu_oem[16];
@@ -70,6 +76,10 @@ unsigned long g_LDT_region;
 unsigned long g_TSS_region;
 unsigned long g_TOS_region;
 unsigned long h_MSR_region;
+void getProcCpuid(void);
+void getCrRegs(void);
+void getMSR(u32 msr, u32 *low, u32 *hi);
+int vmxCheckSupportEPT(void);
 
 DEFINE_MUTEX(my_mutex);
 
@@ -90,6 +100,8 @@ int my_mmap( struct file *file, struct vm_area_struct *vma )
 	vma->vm_flags |= (VM_DONTEXPAND | VM_DONTDUMP);
 
 	// ask the kernel to add page-table entries to 'map' these arenas
+	// Maps kernel physical memroy in kmem[] to user_virtaddr (starting at 
+	// 0x00000000L) in userspace.
 	for (i = 0; i < N_ARENAS+6; i++)
 		{
 		int	j = i % 16;
@@ -120,7 +132,7 @@ my_fops =	{
 
 
 int wiser_show(struct seq_file *m, void *v) {
-	int	i, len;
+	int	i;
 
 	seq_printf( m, "\n\t%s\n\n", "VMX-Capability MSRs" );
 	for (i = 0; i < 11; i++)
@@ -183,6 +195,14 @@ struct proc_dir_entry *proc_file_entry = NULL;
 int init_module( void )
 {
 	int	i, j;
+	u32 low, hi;
+        uint32_t vmcs_num_bytes;
+
+        getProcCpuid();
+        getCrRegs();
+        getMSR(IA32_VMX_BASIC,  &low, &hi);
+        vmcs_num_bytes  =  hi & 0xfff; // Bits 44:32
+        printk("vmcs_num_bytes = 0x%x\n", vmcs_num_bytes);
 
 	// confirm installation and show device-major number
 	printk( "<1>\nInstalling \'%s\' module ", modname );
@@ -323,6 +343,21 @@ long my_ioctl( struct file *file, unsigned int count, unsigned long buf )
 	memcpy( phys_to_virt( guest_region ), msr0x480, 4 );
 
 	// initialize our guest-task's page-table and page-directory
+    // Set the page tables up as follows
+    // for index [0] - [9], pick up phys address as kmem[i]
+    // Now, since each kmem[i] is 64 Kbyte, it can have 16 Pages
+    // So, 16 * (i=10) = 160 PTEs map out the complete 64K of kmem
+    // memory, we have allcoated.
+    // Now, pick up 6 more, and add PTEs for the next [10] to [15]
+    // i.e. 6 * 16 PTEs = 96 PTE entries
+    // Finally, set 16 PTEs from 16*16 (256 to 271) to kmem[0], and 
+    // 17*16(272) to 287 to kmem[10]
+    // So, a total of 287 PTEs
+    // These are Interrupt Vector Table and Extended BIOS areas
+    // Now, set pgdir to physical address of pgdir_region and set its
+    // first member to physical address of pgtbl_region above
+    // Note that "7" is added to all entries to set the Present/Rd&Wr/User bit
+    // for all entries
 	pgtbl = (unsigned int*)phys_to_virt( pgtbl_region );
 	for (i = 0; i < 18; i++)
 		{
@@ -349,6 +384,8 @@ long my_ioctl( struct file *file, unsigned int count, unsigned long buf )
 		mutex_unlock(&my_mutex);
 		return -EFAULT;
 	}
+    // Copy in the guest register values
+    // 24.11.2 VMREAD, VMWRITE, and Encodings of VMCS Fields
 	guest_ES_selector = vm.es;
 	guest_CS_selector = vm.cs;
 	guest_SS_selector = vm.ss;
@@ -369,6 +406,11 @@ long my_ioctl( struct file *file, unsigned int count, unsigned long buf )
 	guest_RFLAGS |= (1 <<  1);	// it's essential to set bit #1
 
 	// setup other guest-state fields (for Virtual-8086 mode)
+	// The segment address is added to a 16-bit offset in the instruction
+	// to yield a linear address, which is the same as physical address
+	// in this mode. That is the reason, the selector is left shifted to
+	// get the base address, that is added to the instruction.
+	// 24.4 GUEST-STATE AREA and 27.3 SAVING GUEST STATE - Intel Arch
 	guest_ES_base = (guest_ES_selector << 4);
 	guest_CS_base = (guest_CS_selector << 4);
 	guest_SS_base = (guest_SS_selector << 4);
@@ -388,7 +430,16 @@ long my_ioctl( struct file *file, unsigned int count, unsigned long buf )
 	guest_FS_access_rights = 0xF3;
 	guest_GS_access_rights = 0xF3;
 
+    // CR0:
+    // 0    PE  Protected Mode Enable
+    // 4    ET  Extension type
+    // 5    NE  Numeric error
+    // 31   PG  Paging
 	guest_CR0 = 0x80000031;
+    // CR4: 
+    // 0    VME Virtual 8086 Mode Extensions
+    // 4    PSE Page Size Extension - page size is increased to 4 MiB
+    // 13   VMXE    Virtual Machine Extensions Enable
 	guest_CR4 = 0x00002011;
 	guest_CR3 = pgdir_region;
 	guest_VMCS_link_pointer_full = 0xFFFFFFFF;
@@ -518,6 +569,21 @@ long my_ioctl( struct file *file, unsigned int count, unsigned long buf )
 	//---------------------
 	// launch the guest VM 
 	//---------------------
+	// lea instruction below, loads the my_vmm pointer into RAX, which
+	// is then copied into host RIP
+	// There are two flags used to signify the success or failure of a VM 
+	// instruction. The carry flag(CF) and the zero flag(ZF).
+	// If both of these flags are clear after a VM instruction was executed 
+	// then it succeeded.  
+	//
+	// If carry flag is set then current VMCS pointer //is invalid.
+	// If the zero flag is set, it indicates that the VMCS pointer is valid 
+	// but there is some other error specified in the VM-instruction error 
+	// field (encoding 4400h) - info_vminstr_error
+	//
+	// retval - is the return value, and is set various numbers to indicate
+	// the progress in case something fails
+
 	asm volatile ("	.type  my_vmm, @function	\n"\
 		" pushfq				\n"\
 		" push	%rax				\n"\
@@ -628,3 +694,161 @@ printk( " VMexit-interruption-error-code:  %08X \n",
 	return	retval;
 }
 
+//------------------------------
+/*
+ * home computer: Model 7, Extended Model 1
+ * Intel Core 2 Extreme processor, Intel Xeon, model 17h
+ */
+
+void getCpuid (unsigned int *eax, unsigned int *ebx,
+		 unsigned int *ecx, unsigned int *edx) {
+	// ecx is input and output
+	asm volatile("cpuid"
+		: "=a" (*eax), // outputs
+		  "=b" (*ebx),
+		  "=c" (*ecx),
+		  "=d" (*edx)
+		: "0" (*eax), "2" (*ecx));  // inputs - 0th index 
+}
+
+/* 
+ * https://en.wikipedia.org/wiki/CPUID
+ * The format of the information in EAX is as follows:
+ * 3:0 – Stepping
+ * 7:4 – Model
+ * 11:8 – Family
+ * Processor Type: 00: Original OEM, 01: OneDrive, 10: Dual proc, 11: Intel resvd 
+ * 13:12 – Processor Type
+ * 19:16 – Extended Model
+ * 27:20 – Extended Family
+ */
+void getProcCpuid(void) {
+	unsigned eax, ebx, ecx, edx;
+
+	ecx = 0x0;
+	eax = 1; // proc info
+	getCpuid(&eax, &ebx, &ecx, &edx);
+	printk("Stepping %d\n", eax & 0xF);
+	printk("Model %d\n", (eax >> 4) & 0xF);
+	printk("Family %d\n", (eax >> 12) & 0xF);
+	printk("Processor Type %d\n", (eax >> 12) & 0x3);
+	printk("Extended Model %d\n", (eax >> 16) & 0xF);
+	printk("Extended Family %d\n", (eax >> 20) & 0xFF);
+
+	eax = 3; // serial number
+	getCpuid(&eax, &ebx, &ecx, &edx);
+	printk("Serial Number 0x%08x%08x\n", edx, ecx);
+}
+void setCr4Vmxe(void *dummy) {
+	asm( "mov %%cr4, %%rax	\n"\
+		 "bts $13, %%rax	\n"\
+		 "mov %%rax, %%cr4	\n"\
+		:::"ax");
+}
+
+void clearCr4Vmxe(void *dummy) {
+	asm( "mov %%cr4, %%rax	\n"\
+		 "btr $13, %%rax	\n"\
+		 "mov %%rax, %%cr4	\n"\
+		:::"ax");
+}
+#define CHKBIT(val, x) ((val>>x) & 0x1)
+
+/*
+ * en.wikipedia.org/wiki/CPUID
+ * EAX=1: Processor Info and Feature Bits
+ * Check bit5 of ECX for VMX support
+ */
+int vmxCheckSupport(int cmd) {
+	unsigned eax, ebx, ecx, edx;
+
+	ecx = 0x0;
+	eax = cmd; // proc info
+	getCpuid(&eax, &ebx, &ecx, &edx);
+	if (CHKBIT(ecx, 5) == 1)
+		return 1;
+	else
+		return 0;
+
+}
+
+/*
+ * processor is in 32 bit mode here
+ */
+void writeCr0(unsigned long val) {
+         asm volatile(
+			"mov %0, %%cr0"
+		: 
+		:"r" (val)
+		);
+}
+
+/*
+ * READ MSRs// 30:00 VMCS revision id
+ *  31:31 shadow VMCS indicator
+ *  -----------------------------
+ *  32:47 VMCS region size, 0 <= size <= 4096
+ *  48:48 use 32-bit physical address, set when x86_64 disabled
+ *  49:49 support of dual-monitor treatment of SMI and SMM
+ *  53:50 memory type used for VMCS access
+ *  54:54 logical processor reports information in the VM-exit 
+ *        instruction-information field on VM exits due to
+ *        execution of INS/OUTS
+ *  55:55 set if any VMX controls that default to `1 may be
+ *        cleared to `0, also indicates that IA32_VMX_TRUE_PINBASED_CTLS,
+ *        IA32_VMX_TRUE_PROCBASED_CTLS, IA32_VMX_TRUE_EXIT_CTLS and
+ *        IA32_VMX_TRUE_ENTRY_CTLS MSRs are supported.
+ *  56:63 reserved, must be zero
+ */
+void getMSR(u32 msr, u32 *low, u32 *hi) {
+	asm volatile("rdmsr" : "=a"(*low), "=d"(*hi) : "c"(msr));
+	printk("getMSR: msr=0x%x, hi=%x lo=%x\n", msr, *hi, *low);
+}
+
+int vmxCheckSupportEPT() {
+	u32 low, hi;
+	getMSR(IA32_VMX_PROCBASED_CTLS, &low, &hi);
+	printk("MSR IA32_VMX_PROCBASED_CTLS: hi: %x, low: %x\n", hi, low);
+	if (CHKBIT(hi, 31) == 1) { // 63rd bit should be 1
+		getMSR(IA32_VMX_PROCBASED_CTLS2, &low, &hi);
+		if (CHKBIT(hi, 2) == 1) // 33rd bit should be 1
+			return 1;
+	}
+	return 0;
+}
+
+void getCrRegs(void) {
+#ifdef __x86_64__
+	u64 cr0, cr2, cr3;
+	printk("x86_64 mode\n");
+	asm volatile (
+		"mov %%cr0, %%rax\n\t"
+		"mov %%eax, %0\n\t"
+		"mov %%cr2, %%rax\n\t"
+		"mov %%eax, %1\n\t"
+		"mov %%cr4, %%rax\n\t"
+		"mov %%eax, %2\n\t"
+	:	"=m" (cr0), "=m" (cr2), "=m" (cr3)
+	:	/* no input */
+	:	"%rax"
+	);
+#elif defined(__i386__)
+	printk("x86 i386 mode\n");
+	u32 cr0, cr2, cr3;
+	printk("x86_64 mode\n");
+	asm volatile (
+		"mov %%cr0, %%eax\n\t"
+		"mov %%eax, %0\n\t"
+		"mov %%cr2, %%eax\n\t"
+		"mov %%eax, %1\n\t"
+		"mov %%cr4, %%eax\n\t"
+		"mov %%eax, %2\n\t"
+	:	"=m" (cr0), "=m" (cr2), "=m" (cr3)
+	:	/* no input */
+	:	"%eax"
+	);
+#endif
+	printk("cr0 = 0x%llx\n", cr0);
+	printk("cr2 = 0x%llx\n", cr2);
+	printk("cr3 = 0x%llx\n", cr3);
+}

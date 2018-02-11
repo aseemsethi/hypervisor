@@ -1,0 +1,7 @@
+tryoutpc
+*.ko
+*.order
+*.o
+Module.symvers
+
+
