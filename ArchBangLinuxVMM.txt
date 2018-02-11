@@ -1,0 +1,52 @@
+﻿pacman -Syy
+
+
+wget http://ftp.nluug.nl/pub/os/Linux/distr/archlinux/testing/os/x86_64/linux-headers-3.3.4-1-x86_64.pkg.tar.xz
+
+
+pacman -U ./linux-headers-3.3.4-1-x86_64.pkg.tar.xz
+
+
+wget http://www.cs.usfca.edu/~cruse/cs686s07/vmxmsrs.c
+wget http://www.cs.usfca.edu/~cruse/cs686s07/mmake.cpp
+g++ -o mmake mmake.cpp
+mmake vmxmsrs
+
+
+sudo insmod vmxmsrs.ko
+cat /proc/vmxmsrs
+
+
+# TODO substitute these with downloading from the newer linuxvmm location. (with patches applied to support newer linux kernels)
+wget http://www.cs.usfca.edu/~cruse/cs686s07/linuxvmm.c
+wget http://www.cs.usfca.edu/~cruse/cs686s07/tryoutpc.cpp
+wget http://www.cs.usfca.edu/~cruse/cs686s07/machine.h
+wget http://www.cs.usfca.edu/~cruse/cs686s07/myvmx.h
+wget http://www.cs.usfca.edu/~cruse/cs686s07/dram.c
+
+
+# we’ll have to modify dram.c slightly
+
+
+# read http://lwn.net/Articles/119652/ to learn how ioctl has changed in kernel to patch linuxvmm.c
+# and read https://lkml.org/lkml/2008/1/8/213 to learn how to convert the old ioctl to a new one with proper locking...
+# and read http://www.ibm.com/developerworks/linux/library/l-linux-synchronization/index.html to learn that the lock_kernel() / unlock_kernel() no longer exist, requiring use of a mutex:
+
+
+# replace smp_call_function with one less parameter (remove the last)
+
+
+mmake linuxvmm
+
+
+
+
+# mknod /dev/vmm c 88 0
+# chmod a+rw /dev/vmm
+# mknod /dev/dram c 85 0
+# chmod a+rw /dev/dram
+
+
+g++ -o tryoutpc tryoutpc.cpp
+sudo insmod ./linuxvmm.ko
+./tryoutpc?
