@@ -25,7 +25,7 @@
 #include "myvmx.h"	// for 'regs_ia32' 
 
 regs_ia32	vm;
-char devname[] = "/dev/vmm";
+char devname[] = "/dev/wiser";
 
 int main( int argc, char **argv )
 {
