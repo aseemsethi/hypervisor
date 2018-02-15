@@ -465,6 +465,11 @@ long my_ioctl( struct file *file, unsigned int count, unsigned long buf )
 	ldt[ __SELECTOR_VRAM >> 3 ] = 0x0000920B8000FFFF;
 	ldt[ __SELECTOR_FLAT >> 3 ] = 0x008F92000000FFFF;
 	// Adjust the CODE and DATA descriptors here
+	// We are setting up LDT[0] and LDT[1] CS/DS segment descriptors.
+	// LEGACY_REACH << 16 = 0x110000 << 16 = 4400 0000 0000
+	// AND this with 0xFFFF FF 0000
+	// we get - 0x40 0000 0000 - 4 Megs are RAM
+	// This is set in the 64 bit descriptor
 	desc = ( LEGACY_REACH << 16 )&0x000000FFFFFF0000;
 	ldt[ __SELECTOR_CODE >> 3 ] |= desc;
 	ldt[ __SELECTOR_DATA >> 3 ] |= desc;
