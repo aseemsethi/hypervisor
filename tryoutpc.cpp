@@ -41,8 +41,11 @@ int main( int argc, char **argv )
 		{ perror( "mmap" ); exit(1); }
 	
 	// fetch the vector for the desired interrupt
+	// int 0x11: equipment-list service. We give this BIOS interupt from the guest and get results
+	// in ax register
 	unsigned int	interrupt_number = 0x11;  // <--changed on 5/4/2007
 	unsigned int	vector = *(unsigned int*)( interrupt_number << 2 );
+	// after guest has executed, the value of the ax register is AAAA4226
 
 	// show the selected interrupt-vector 	
 	printf( "\ninterrupt-0x%02X: ", interrupt_number );

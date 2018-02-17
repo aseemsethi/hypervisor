@@ -19,6 +19,16 @@
 //      revised on: 13 JUN 2012 -- for Linux kernel version 3.3.4
 //-------------------------------------------------------------------
 
+// Kernel module: linuxvmm.c this is an initial device-driver prototype for our '/dev/vmm' device-file <--- revised on 7/21/2008
+// Demo program: tryoutpc.cpp written for testing the functions in our 'linuxvmm.c' device-driver <-- modified on 5/4/2007
+
+// Kernel module: inject08.c modifies our 'linuxvmm.c' driver so it 'injects' an event into its guest VM <-- modified on 7/3/2008
+// Demo program: seeevent.cpp shows us the effect of the event-injection performed by 'inject08.c'
+
+// Kernel module: nmiexits.c modifies our 'linuxvmm.c' driver so host handles all asychronous events <--- revised on 7/21/2008
+// Demo program: trydelay.cpp for testing our 'nmiexits.ko' driver (and counting the interrupts handled)
+
+
 #include <linux/module.h>	// for init_module() 
 #include <linux/proc_fs.h>	// for create_proc_read_entry() 
 #include <linux/fs.h>		// for struct file_operations 
