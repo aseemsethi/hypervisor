@@ -43,9 +43,28 @@ int main( int argc, char **argv )
 	// fetch the vector for the desired interrupt
 	// int 0x11: equipment-list service. We give this BIOS interupt from the guest and get results
 	// in ax register
+	// http://stanislavs.org/helppc/bios_data_area.html
 	unsigned int	interrupt_number = 0x11;  // <--changed on 5/4/2007
 	unsigned int	vector = *(unsigned int*)( interrupt_number << 2 );
-	// after guest has executed, the value of the ax register is AAAA4226
+	/* after guest has executed, the value of the ax register is AAAA4226
+	*  0100 0010 0010 0110
+	on return:
+	AX contains the following bit flags:
+
+	|F|E|D|C|B|A|9|8|7|6|5|4|3|2|1|0|  AX
+	 | | | | | | | | | | | | | | | `---- IPL diskette installed
+	 | | | | | | | | | | | | | | `----- math coprocessor
+	 | | | | | | | | | | | | `-------- old PC system board RAM < 256K
+	 | | | | | | | | | | | | | `----- pointing device installed (PS/2)
+	 | | | | | | | | | | | | `------ not used on PS/2
+	 | | | | | | | | | | `--------- initial video mode
+	 | | | | | | | | `------------ # of diskette drives, less 1
+	 | | | | | | | `------------- 0 if DMA installed
+	 | | | | `------------------ number of serial ports
+	 | | | `------------------- game adapter installed
+	 | | `-------------------- unused, internal modem (PS/2)
+	 `----------------------- number of printer ports
+	*/
 
 	// show the selected interrupt-vector 	
 	printf( "\ninterrupt-0x%02X: ", interrupt_number );

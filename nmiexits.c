@@ -38,6 +38,9 @@
 #include <asm/uaccess.h>	// for copy_from_user()
 #include "machine.h"		// for our VMCS fields
 #include "myvmx.h"		// for 'regs_ia32'
+#include <linux/slab.h>     // for kmalloc()
+#include <linux/proc_fs.h>  // for create proc entry
+#include <linux/seq_file.h>
 
 #define N_ARENAS	11	// number of 64KB memory allocations
 #define ARENA_LENGTH  (64<<10)	// size of each allocated memory-arena
@@ -60,7 +63,7 @@
 #define __SELECTOR_FLAT	0x001C
 
 char modname[] = "nmiexits";
-int my_major = 88;
+int my_major = 108;
 char cpu_oem[16];
 int cpu_features;
 void *kmem[ N_ARENAS ];
@@ -79,7 +82,7 @@ unsigned long g_TOS_region;
 unsigned long g_ISR_region;
 
 
-int my_ioctl( struct inode *, struct file *, unsigned int, unsigned long );
+long my_ioctl( struct file *, unsigned int, unsigned long );
 
 int my_mmap( struct file *file, struct vm_area_struct *vma )
 {
@@ -93,7 +96,7 @@ int my_mmap( struct file *file, struct vm_area_struct *vma )
 	if ( region_length != LEGACY_REACH ) return -EINVAL;
 
 	// let the kernel know not to try swapping out this region
-	vma->vm_flags |= VM_RESERVED;
+    vma->vm_flags |= (VM_DONTEXPAND | VM_DONTDUMP);
 
 	// ask the kernel to add page-table entries to 'map' these arenas
 	for (i = 0; i < N_ARENAS+6; i++)
@@ -120,7 +123,7 @@ int my_mmap( struct file *file, struct vm_area_struct *vma )
 struct file_operations	
 my_fops =	{
 		owner:		THIS_MODULE,
-		ioctl:		my_ioctl,
+        .unlocked_ioctl=    my_ioctl,
 		mmap:		my_mmap,
 		};
 
@@ -152,6 +155,52 @@ my_info( char *buf, char **start, off_t off, int count, int *eof, void *data )
 	return	len;
 }
 
+int wiser_show(struct seq_file *m, void *v) {
+    int i;
+
+    seq_printf( m, "\n\t%s\n\n", "VMX-Capability MSRs" );
+    for (i = 0; i < 11; i++)
+        {
+        seq_printf( m, "\tMSR0x%X=", 0x480 + i );
+        seq_printf( m, "%016lX \n", msr0x480[i] );
+        }
+    seq_printf( m, "\n" );
+    seq_printf( m, "\n" );
+
+    seq_printf( m, "CR0=%016lX  ", cr0 );
+    seq_printf( m, "CR4=%016lX  ", cr4 );
+    seq_printf( m, "EFER=%016lX  ", msr_efer );
+    seq_printf( m, "\n" );
+
+    seq_printf( m, "\n\t\t\t" );
+    seq_printf( m, "vmxon_region=%016lX \n", vmxon_region );
+    seq_printf( m, "\n" );
+    seq_printf( m, "guest_region=%016lX \n", guest_region );
+    seq_printf( m, "pgdir_region=%016lX \n", pgdir_region );
+    seq_printf( m, "pgtbl_region=%016lX \n", pgtbl_region );
+    seq_printf( m, "g_IDT_region=%016lX \n", g_IDT_region );
+    seq_printf( m, "g_GDT_region=%016lX \n", g_GDT_region );
+    seq_printf( m, "g_LDT_region=%016lX \n", g_LDT_region );
+    seq_printf( m, "g_TSS_region=%016lX \n", g_TSS_region );
+    seq_printf( m, "g_TOS_region=%016lX \n", g_TOS_region );
+    seq_printf( m, "\n" );
+
+    return 0;
+}
+
+
+static int wiser_open(struct inode *inode, struct  file *file) {
+  return single_open(file, wiser_show, NULL);
+}
+static const struct file_operations wiserInfo = {
+  .owner = THIS_MODULE,
+  .open = wiser_open,
+  .read = seq_read,
+  .llseek = seq_lseek,
+  .release = single_release,
+};
+
+
 void set_CR4_vmxe( void *dummy )
 {
 	asm(	" mov %%cr4, %%rax 	\n"\
@@ -166,6 +215,8 @@ void clear_CR4_vmxe( void *dummy )
 		" mov %%rax, %%cr4	" ::: "ax" );
 }
 
+
+struct proc_dir_entry *proc_file_entry = NULL;
 
 int init_module( void )
 {
@@ -245,9 +296,14 @@ int init_module( void )
 
 	// enable virtual machine extensions (bit 13 in CR4)
 	set_CR4_vmxe( NULL );	
-	smp_call_function( set_CR4_vmxe, NULL, 1, 1 );
+	smp_call_function( set_CR4_vmxe, NULL, 1 );
 
-	create_proc_read_entry( modname, 0, NULL, my_info, NULL );
+	//create_proc_read_entry( modname, 0, NULL, my_info, NULL );
+    proc_file_entry = proc_create(modname, 0, NULL, &wiserInfo);
+    if(proc_file_entry == NULL) {
+        printk("Could not create proc entry\n");
+        return 0;
+    }
 	return	register_chrdev( my_major, modname, &my_fops );
 }
 
@@ -256,7 +312,7 @@ void cleanup_module( void )
 {
 	int	i;
 
-	smp_call_function( clear_CR4_vmxe, NULL, 1, 1 );
+	smp_call_function( clear_CR4_vmxe, NULL, 1 );
 	clear_CR4_vmxe( NULL );
 
 	unregister_chrdev( my_major, modname );
@@ -277,7 +333,7 @@ int	extints = 0;
 
 regs_ia32	vm;
 
-int my_ioctl( struct inode *inode, struct file *file, 
+long my_ioctl(  struct file *file, 
 				unsigned int count, unsigned long buf )
 {
 	unsigned long	*gdt, *ldt, *idt;
